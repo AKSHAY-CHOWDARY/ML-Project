@@ -4,7 +4,7 @@ seaborn
 matplotlib
 scikit-learn
 catboost
-xgboost
+xgboost-cpu
 dill
 flask
 # -e .
