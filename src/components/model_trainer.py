@@ -101,9 +101,20 @@ class ModelTrainer:
                 raise CustomException("No best model found")
             logging.info(f"Best found model on both training and testing dataset")
 
+            logging.info(f"Best model: {best_model_name}")
+            logging.info(f"Best model score: {best_model_score}")
+
             save_object(
                 file_path=self.model_trainer_config.trained_model_file_path,
                 obj=best_model
+            )
+
+            logging.info("Model successfully saved!")
+
+            print(
+                "Model size:",
+                os.path.getsize(self.model_trainer_config.trained_model_file_path),
+                "bytes"
             )
 
             predicted = best_model.predict(X_test)
