@@ -13,9 +13,14 @@ permissions:
   contents: read
 
 jobs:
+
+  # ==========================================
+  # JOB 1: CONTINUOUS INTEGRATION
+  # ==========================================
   integration:
     name: Continuous Integration
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -26,10 +31,16 @@ jobs:
       - name: Run unit tests
         run: echo "Running unit tests"
 
+
+  # ==========================================
+  # JOB 2: CONTINUOUS DELIVERY
+  # BUILD AND PUSH DOCKER IMAGE TO ECR
+  # ==========================================
   build-and-push-ecr-image:
     name: Continuous Delivery
     needs: integration
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -60,17 +71,28 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           IMAGE_TAG: latest
-        run: |
-          # Build a docker container and
-          # push it to ECR so that it can
-          # be deployed to ECS.
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
+        run: |
+          echo "Building Docker image..."
+
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+
+          echo "Pushing Docker image to ECR..."
+
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+
+  # ==========================================
+  # JOB 3: CONTINUOUS DEPLOYMENT
+  # DEPLOY ON EC2 USING SELF-HOSTED RUNNER
+  # ==========================================
   Continuous-Deployment:
+    name: Continuous Deployment
     needs: build-and-push-ecr-image
     runs-on: self-hosted
+
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -82,10 +104,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      - name: Verify AWS Identity
+        run: |
+          aws sts get-caller-identity
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
+      # Pull latest image from ECR
       - name: Pull latest images
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -96,15 +123,29 @@ jobs:
           echo "Repository: $ECR_REPOSITORY"
 
           docker pull $ECR_REGISTRY/$ECR_REPOSITORY:latest
-      # - name: Stop and remove container if running
-      #   run: |
-      #     docker ps -q --filter "name=mltest" | grep -q . && docker stop mltest && docker rm -fv mltest
 
-      - name: Run Docker Image to serve users
+      # Stop and remove previous container
+      - name: Stop and remove existing container
         run: |
-          docker run -d -p 8080:8080 --ipc="host" --name=mltest \
-            ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
+          if [ "$(docker ps -aq -f name=^studentperformance-app$)" ]; then
+            docker stop studentperformance-app || true
+            docker rm studentperformance-app || true
+          fi
 
+      # Run the latest Docker image
+      - name: Run Docker Image to serve users
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+        run: |
+          docker run -d \
+            -p 8080:8080 \
+            --ipc="host" \
+            --restart unless-stopped \
+            --name=studentperformance-app \
+            $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      # Clean unused Docker images
       - name: Clean previous images and containers
         run: |
-          docker system prune -f
+          docker image prune -f
